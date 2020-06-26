@@ -2,148 +2,149 @@
 
 Param (
 
-    [Parameter(mandatory = $true)][ValidateSet('Backup', 'Compare')][string]$Action,
-    [Parameter(mandatory = $false)][string]$Path,
-    [Parameter(mandatory = $false)][uri]$SendToFlowURL,
-    [Parameter(mandatory = $false)][string]$OverrideAdminDomain
+  [Parameter(mandatory = $true)][ValidateSet('Backup', 'Compare')][string]$Action,
+  [Parameter(mandatory = $false)][string]$Path,
+  [Parameter(mandatory = $false)][uri]$SendToFlowURL,
+  [Parameter(mandatory = $false)][string]$OverrideAdminDomain
 
 )
 
 function Check-ModuleInstalled {
-    param (
+  param (
 
-        [Parameter (mandatory = $true)][String]$module,
-        [Parameter (mandatory = $true)][String]$moduleName
-        
-    )
+    [Parameter (mandatory = $true)][String]$module,
+    [Parameter (mandatory = $true)][String]$moduleName
 
-    # Do you have module installed?
-    Write-Host "`nChecking $moduleName installed..." -NoNewline
+  )
 
-    if (Get-Module -ListAvailable -Name $module) {
-    
-        Write-Host " INSTALLED" -ForegroundColor Green
+  # Do you have module installed?
+  Write-Host "`nChecking $moduleName installed..." -NoNewline
 
-    }
-    else {
+  if (Get-Module -ListAvailable -Name $module) {
 
-        Write-Host " NOT INSTALLED" -ForegroundColor Red
-        
-        break
+    Write-Host " INSTALLED" -ForegroundColor Green
 
-    }
-    
+  }
+  else {
+
+    Write-Host " NOT INSTALLED" -ForegroundColor Red
+
+    break
+
+  }
+
 }
 
 function Check-ExistingPSSession {
-    param (
-        [Parameter (mandatory = $true)][string]$ComputerName
-    )
-    
-    $OpenSessions = Get-PSSession | Where-Object { $_.ComputerName -like $ComputerName -and $_.State -eq "Opened" }
+  param (
+    [Parameter (mandatory = $true)][string]$ComputerName
+  )
 
-    return $OpenSessions
+  $OpenSessions = Get-PSSession | Where-Object { $_.ComputerName -like $ComputerName -and $_.State -eq "Opened" }
+
+  return $OpenSessions
 
 }
 
 function Get-Configuration {
 
-    param (
-        
-        [Parameter(mandatory = $true)][String]$Command
+  param (
 
-    )
+    [Parameter(mandatory = $true)][String]$Command
 
-    $Output = try {
-        
-        Invoke-Expression $Command
+  )
 
-    }
-    catch {
-        
-        "FAILED"
+  $Output = try {
 
-    }
+    Invoke-Expression $Command
 
-    return $Output
+  }
+  catch {
+
+    "FAILED"
+
+  }
+
+  return $Output
 
 }
 
 function Backup-Configuration {
-    param (
-        
-        [Parameter(mandatory = $true)][String]$Type
+  param (
 
-    )
-    
-    # Run Get-CS Command for type
-    Write-Host "    $Type..." -ForegroundColor "Yellow"
+    [Parameter(mandatory = $true)][String]$Type
 
-    # Special cases with added parameters
-    switch ($Type) {
-        CallQueue { $Output = Get-Configuration "Get-CS$Type -First 10000" }
-        Default { $Output = Get-Configuration "Get-CS$Type" }
-    } 
+  )
 
-    if ($Output -eq "FAILED") {
+  # Run Get-CS Command for type
+  Write-Host "    $Type..." -ForegroundColor "Yellow"
 
-        # Item Status
-        $Item = @{ }
-        $Item.Name = $Type
-        $Item.Status = $Output
+  # Special cases with added parameters
+  switch ($Type) {
+    CallQueue { $Output = Get-Configuration "Get-CS$Type -First 10000" }
+    Default { $Output = Get-Configuration "Get-CS$Type" }
+  }
 
-        $script:FailedItems += New-Object PSObject -Property $Item
+  if ($Output -eq "FAILED") {
 
-        Write-Host "       - Failed to get configuration" -ForegroundColor Red
+    # Item Status
+    $Item = @{ }
+    $Item.Name = $Type
+    $Item.Status = $Output
+
+    $script:FailedItems += New-Object PSObject -Property $Item
+
+    Write-Host "       - Failed to get configuration" -ForegroundColor Red
+
+  }
+  elseif ($Output) {
+
+    # Save to CliXML object
+    Write-Host "       - Saving $Type to XML - $Type.xml... " -NoNewline
+    try {
+
+      $Output | Export-Clixml -Path "$Path\_TeamsConfigBackupTemp_\$Type.xml" -Depth 15
+      Write-Host "SUCCESS" -ForegroundColor Green
 
     }
-    elseif ($Output) {
+    catch {
 
-        # Save to CliXML object
-        Write-Host "       - Saving $Type to XML - $Type.xml... " -NoNewline
-        try {
+      Write-Host "FAILED" -ForegroundColor Red
 
-            $Output | Export-Clixml -Path "$Path\_TeamsConfigBackupTemp_\$Type.xml" -Depth 15
-            Write-Host "SUCCESS" -ForegroundColor Green
+    }
 
-        }
-        catch {
+    # Save to HTML page
+    # Each Item
+    $Output | ForEach-Object {
 
-            Write-Host "FAILED" -ForegroundColor Red
+      $htmlRows = $null
 
-        }
+      # Each Property
+      $_.PSObject.Properties | Sort-Object -Property Name | ForEach-Object {
 
-        # Save to HTML page      
-        # Each Item
-        $Output | ForEach-Object {
+        if ($script:exclude -notcontains $_.Name) {
 
-            $htmlRows = $null
-
-            # Each Property
-            $_.PSObject.Properties | Sort-Object -Property Name | Foreach-Object {
-
-                if ($script:exclude -notcontains $_.Name) {
-
-                    $htmlRows += "<tr>
+          $htmlRows += "<tr>
                         <th scope='row'>$($_.Name):</th>
                         <td>$($_.Value)</td>
                     </tr>"
 
-                }
-                
-            }
+        }
 
-            if ($_.Name) {
-                
-                $title = $_.Name
+      }
 
-            } elseif ($_.Identity) {
-                
-                $title = $_.Identity
+      if ($_.Name) {
 
-            }
+        $title = $_.Name
 
-            $htmlContent += "<div class='card'>
+      }
+      elseif ($_.Identity) {
+
+        $title = $_.Identity
+
+      }
+
+      $htmlContent += "<div class='card'>
                     <h5 class='card-header bg-light'>$title</h5>
                     <div class='card-body'>
                         <table class='table table-borderless'>
@@ -155,9 +156,9 @@ function Backup-Configuration {
                 </div>
                 <br />"
 
-        }
+    }
 
-        $html = "<div class='card'>
+    $html = "<div class='card'>
                     <h5 class='card-header bg-light'>Overview</h5>
                     <div class='card-body'>
                         <table class='table table-borderless'>
@@ -176,222 +177,222 @@ function Backup-Configuration {
                 </div>
                 <br />
                 $htmlContent"
-                
-        Write-Host "       - Saving $Type to HTML - $Type.htm... " -NoNewline
-        Create-HTMLPage -Content $html -PageTitle "$Type" -Path "$Path\_TeamsConfigBackupTemp_\HTML\$Type.htm"
 
-        # Item Count
-        $Item = @{ }
-        $Item.Name = $Type
-        $Item.NumberOfObjects = $Output.Identity.Count
-                        
-        $script:SavedItems += New-Object PSObject -Property $Item
+    Write-Host "       - Saving $Type to HTML - $Type.htm... " -NoNewline
+    Create-HTMLPage -Content $html -PageTitle "$Type" -Path "$Path\_TeamsConfigBackupTemp_\HTML\$Type.htm"
 
-        # If a CQ or AA, download custom audio .WAV files
-        if ($type -eq "CallQueue") {
+    # Item Count
+    $Item = @{ }
+    $Item.Name = $Type
+    $Item.NumberOfObjects = $Output.Identity.Count
 
-            $Output | ForEach-Object {
+    $script:SavedItems += New-Object PSObject -Property $Item
 
-                $CallQueue = Get-CSCallQueue -Identity $_.Identity
+    # If a CQ or AA, download custom audio .WAV files
+    if ($type -eq "CallQueue") {
 
-                # Music On Hold
-                if ($CallQueue.MusicOnHoldFileDownloadUri -and $CallQueue.UseDefaultMusicOnHold -eq $false) {
+      $Output | ForEach-Object {
 
-                    Backup-AudioFile -Id $_.Identity -AppType "CallQueue" -Uri $CallQueue.MusicOnHoldFileDownloadUri -MessageType "MusicOnHold"
+        $CallQueue = Get-CSCallQueue -Identity $_.Identity
 
-                }
+        # Music On Hold
+        if ($CallQueue.MusicOnHoldFileDownloadUri -and $CallQueue.UseDefaultMusicOnHold -eq $false) {
 
-                # Welcome Greeting
-                if ($CallQueue.WelcomeMusicFileDownloadUri) {
-
-                    Backup-AudioFile -Id $_.Identity -AppType "CallQueue" -Uri $CallQueue.WelcomeMusicFileDownloadUri -MessageType "Greeting"
-
-                }
-
-            }    
-
-        }
-        elseif ($type -eq "AutoAttendant") {
-            
-            $Output | ForEach-Object {
-
-                $id = $_.Identity
-
-                $AutoAttendant = Get-CSAutoAttendant -Identity $id
-
-                # Business Hours Welcome Greeting
-                if ($AutoAttendant.DefaultCallFlow.Greetings.AudioFilePrompt.DownloadURI) {
-
-                    $name = $AutoAttendant.DefaultCallFlow.DisplayMenu -replace " ", ""
-
-                    Backup-AudioFile -Id $id -Scenario $name -AppType "AutoAttendant" -Uri $AutoAttendant.DefaultCallFlow.Greetings.AudioFilePrompt.DownloadURI -MessageType "Greeting" 
-
-                }
-
-                # Business Hours Menu Prompt
-                if ($AutoAttendant.DefaultCallFlow.Menu.Prompts.AudioFilePrompt.DownloadURI) {
-
-                    $name = $AutoAttendant.DefaultCallFlow.DisplayMenu -replace " ", "" 
-
-                    Backup-AudioFile -Id $id -Scenario $name -AppType "AutoAttendant" -Uri $AutoAttendant.DefaultCallFlow.Menu.Prompts.AudioFilePrompt.DownloadURI -MessageType "MenuPrompt"
-
-                }
-
-                # Other Welcome Greetings and Menus
-                $AutoAttendant.CallFlows | Foreach-Object {
-                    
-                    $name = $_.DisplayMenu -replace " ", ""
-
-                    # Welcome Greeting
-                    if ($_.Greetings.AudioFilePrompt.DownloadUri) {
-
-                        Backup-AudioFile -Id $id -Scenario $name -AppType "AutoAttendant" -Uri $_.Greetings.AudioFilePrompt.DownloadUri -MessageType "Greeting"
-
-                    }
-
-                    # Menu Prompt
-                    if ($_.Menu.Prompts.AudioFilePrompt.DownloadUri) {
-
-                        Backup-AudioFile -Id $id -Scenario $name -AppType "AutoAttendant" -Uri $_.Menu.Prompts.AudioFilePrompt.DownloadUri -MessageType "MenuPrompt"
-
-                    }
-                
-                }
-
-            }    
+          Backup-AudioFile -Id $_.Identity -AppType "CallQueue" -Uri $CallQueue.MusicOnHoldFileDownloadUri -MessageType "MusicOnHold"
 
         }
 
-    }
-    else {
+        # Welcome Greeting
+        if ($CallQueue.WelcomeMusicFileDownloadUri) {
 
-        Write-Host "        - No $Type items found!"
+          Backup-AudioFile -Id $_.Identity -AppType "CallQueue" -Uri $CallQueue.WelcomeMusicFileDownloadUri -MessageType "Greeting"
+
+        }
+
+      }
 
     }
+    elseif ($type -eq "AutoAttendant") {
+
+      $Output | ForEach-Object {
+
+        $id = $_.Identity
+
+        $AutoAttendant = Get-CSAutoAttendant -Identity $id
+
+        # Business Hours Welcome Greeting
+        if ($AutoAttendant.DefaultCallFlow.Greetings.AudioFilePrompt.DownloadURI) {
+
+          $name = $AutoAttendant.DefaultCallFlow.DisplayMenu -replace " ", ""
+
+          Backup-AudioFile -Id $id -Scenario $name -AppType "AutoAttendant" -Uri $AutoAttendant.DefaultCallFlow.Greetings.AudioFilePrompt.DownloadURI -MessageType "Greeting"
+
+        }
+
+        # Business Hours Menu Prompt
+        if ($AutoAttendant.DefaultCallFlow.Menu.Prompts.AudioFilePrompt.DownloadURI) {
+
+          $name = $AutoAttendant.DefaultCallFlow.DisplayMenu -replace " ", ""
+
+          Backup-AudioFile -Id $id -Scenario $name -AppType "AutoAttendant" -Uri $AutoAttendant.DefaultCallFlow.Menu.Prompts.AudioFilePrompt.DownloadURI -MessageType "MenuPrompt"
+
+        }
+
+        # Other Welcome Greetings and Menus
+        $AutoAttendant.CallFlows | ForEach-Object {
+
+          $name = $_.DisplayMenu -replace " ", ""
+
+          # Welcome Greeting
+          if ($_.Greetings.AudioFilePrompt.DownloadUri) {
+
+            Backup-AudioFile -Id $id -Scenario $name -AppType "AutoAttendant" -Uri $_.Greetings.AudioFilePrompt.DownloadUri -MessageType "Greeting"
+
+          }
+
+          # Menu Prompt
+          if ($_.Menu.Prompts.AudioFilePrompt.DownloadUri) {
+
+            Backup-AudioFile -Id $id -Scenario $name -AppType "AutoAttendant" -Uri $_.Menu.Prompts.AudioFilePrompt.DownloadUri -MessageType "MenuPrompt"
+
+          }
+
+        }
+
+      }
+
+    }
+
+  }
+  else {
+
+    Write-Host "        - No $Type items found!"
+
+  }
 
 }
 
 function Backup-AudioFile {
 
-    Param (
+  Param (
 
-        [Parameter(mandatory = $true)][string]$Id,
-        [Parameter(mandatory = $false)][string]$Scenario,
-        [Parameter(mandatory = $true)][string]$AppType,
-        [Parameter(mandatory = $true)][string]$MessageType,
-        [Parameter(mandatory = $true)][uri]$Uri
+    [Parameter(mandatory = $true)][string]$Id,
+    [Parameter(mandatory = $false)][string]$Scenario,
+    [Parameter(mandatory = $true)][string]$AppType,
+    [Parameter(mandatory = $true)][string]$MessageType,
+    [Parameter(mandatory = $true)][uri]$Uri
 
-    )
+  )
 
-    try {
+  try {
 
-        if ($Scenario) {
+    if ($Scenario) {
 
-            Write-Host "       - Saving $scenario $MessageType file for $AppType $id as $AppType-$id-$scenario-$MessageType.wav... " -NoNewline
-            Invoke-WebRequest -Uri $uri -OutFile "$Path\_TeamsConfigBackupTemp_\AudioFiles\$AppType-$id-$scenario-$MessageType.wav"
-    
-        }
-        else {
-    
-            Write-Host "       - Saving $MessageType file for $AppType $id as $AppType-$id-$MessageType.wav... " -NoNewline
-            Invoke-WebRequest -Uri $uri -OutFile "$Path\_TeamsConfigBackupTemp_\AudioFiles\$AppType-$id-$MessageType.wav"
-    
-        }
-
-        Write-Host "SUCCESS" -ForegroundColor Green
+      Write-Host "       - Saving $scenario $MessageType file for $AppType $id as $AppType-$id-$scenario-$MessageType.wav... " -NoNewline
+      Invoke-WebRequest -Uri $uri -OutFile "$Path\_TeamsConfigBackupTemp_\AudioFiles\$AppType-$id-$scenario-$MessageType.wav"
 
     }
-    catch {
+    else {
 
-        Write-Host "FAILED" -ForegroundColor Red
+      Write-Host "       - Saving $MessageType file for $AppType $id as $AppType-$id-$MessageType.wav... " -NoNewline
+      Invoke-WebRequest -Uri $uri -OutFile "$Path\_TeamsConfigBackupTemp_\AudioFiles\$AppType-$id-$MessageType.wav"
 
     }
+
+    Write-Host "SUCCESS" -ForegroundColor Green
+
+  }
+  catch {
+
+    Write-Host "FAILED" -ForegroundColor Red
+
+  }
 
 }
 
 function Compare-File {
 
-    Param (
+  Param (
 
-        [Parameter(mandatory = $true)][string]$File
-    
-    )
+    [Parameter(mandatory = $true)][string]$File
 
-    # Import object from file
-    $backup = Import-Clixml -Path ".\_TeamsConfigBackupTemp_\$File"
+  )
 
-    $type = $File -replace ".xml", ""
+  # Import object from file
+  $backup = Import-Clixml -Path ".\_TeamsConfigBackupTemp_\$File"
 
-    Write-Host "`r`nComparing $type..." -ForegroundColor Yellow
-    
-    $backup | ForEach-Object {
+  $type = $File -replace ".xml", ""
 
-        $currentId = $_.Identity
-        
-        $command = "Get-CS$File -Identity '$currentId'" -replace ".xml" , ""
-    
-        Write-Host "    - Comparing Identity: $currentId..." -NoNewline
-    
-        $output = Get-Configuration $command
-    
-        $mismatches = @()
-    
-        $_.PSObject.Properties | Foreach-Object {
-            
-            $name = $_.Name
-            $BackupValue = [string]$_.Value
-            $CurrentValue = [string]$output.$name
-    
-            if ($BackupValue -ne $CurrentValue) {
-    
-                if ($script:exclude -notcontains $name) {
+  Write-Host "`r`nComparing $type..." -ForegroundColor Yellow
 
-                    $mismatch = @{ }
-                    $mismatch.Name = $name
-                    $mismatch.BackupValue = $BackupValue
-                    $mismatch.CurrentValue = $CurrentValue
-                    $mismatch.Type = $type
-                    $mismatch.Identity = $currentId
-        
-                    $mismatches += New-Object PSObject -Property $mismatch
-                    $Script:AllMismatches += New-Object PSObject -Property $mismatch
+  $backup | ForEach-Object {
 
-                }
+    $currentId = $_.Identity
 
-            }
-            
-        } 
-        
-        if ($mismatches) {
+    $command = "Get-CS$File -Identity '$currentId'" -replace ".xml" , ""
 
-            Write-Host " MISTMATCH" -ForegroundColor Red
+    Write-Host "    - Comparing Identity: $currentId..." -NoNewline
 
-            $mismatches | Format-Table -Property Type, Identity, Name, BackupValue, CurrentValue -Wrap
-            
+    $output = Get-Configuration $command
 
-        }
-        else {
+    $mismatches = @()
 
-            Write-Host " MATCHES" -ForegroundColor Green
+    $_.PSObject.Properties | ForEach-Object {
+
+      $name = $_.Name
+      $BackupValue = [string]$_.Value
+      $CurrentValue = [string]$output.$name
+
+      if ($BackupValue -ne $CurrentValue) {
+
+        if ($script:exclude -notcontains $name) {
+
+          $mismatch = @{ }
+          $mismatch.Name = $name
+          $mismatch.BackupValue = $BackupValue
+          $mismatch.CurrentValue = $CurrentValue
+          $mismatch.Type = $type
+          $mismatch.Identity = $currentId
+
+          $mismatches += New-Object PSObject -Property $mismatch
+          $Script:AllMismatches += New-Object PSObject -Property $mismatch
 
         }
 
-        
+      }
 
     }
+
+    if ($mismatches) {
+
+      Write-Host " MISTMATCH" -ForegroundColor Red
+
+      $mismatches | Format-Table -Property Type, Identity, Name, BackupValue, CurrentValue -Wrap
+
+
+    }
+    else {
+
+      Write-Host " MATCHES" -ForegroundColor Green
+
+    }
+
+
+
+  }
 
 }
 
 function Create-HTMLPage {
-    param (
+  param (
 
-        [Parameter(mandatory = $true)][string]$Content,
-        [Parameter(mandatory = $true)][string]$PageTitle,
-        [Parameter(mandatory = $true)][string]$Path
+    [Parameter(mandatory = $true)][string]$Content,
+    [Parameter(mandatory = $true)][string]$PageTitle,
+    [Parameter(mandatory = $true)][string]$Path
 
-    )
+  )
 
-    $html = "
+  $html = "
     <div class='p-0 m-0' style='background-color: #F3F2F1'>
         <div class='container m-3'>
             <div class='page-header'>
@@ -404,18 +405,18 @@ function Create-HTMLPage {
             </div>
     </div>"
 
-    try {
+  try {
 
-        ConvertTo-Html -CssUri "https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" -Body $html -Title $PageTitle | Out-File $Path -Encoding "utf8"
-        Write-Host "SUCCESS" -ForegroundColor Green
+    ConvertTo-Html -CssUri "https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" -Body $html -Title $PageTitle | Out-File $Path -Encoding "utf8"
+    Write-Host "SUCCESS" -ForegroundColor Green
 
-    }
-    catch {
+  }
+  catch {
 
-        Write-Host "FAILED" -ForegroundColor Red
-        Write-Host $_.Exception -ForegroundColor Red
+    Write-Host "FAILED" -ForegroundColor Red
+    Write-Host $_.Exception -ForegroundColor Red
 
-    }
+  }
 
 }
 
@@ -433,147 +434,147 @@ $Connected = Check-ExistingPSSession -ComputerName "*admin*.online.lync.com"
 
 if (!$Connected) {
 
-    Write-Host "No existing Skype Online PowerShell Session..."
+  Write-Host "No existing Skype Online PowerShell Session..."
 
-    if ($OverrideAdminDomain) {
+  if ($OverrideAdminDomain) {
 
-        $CSSession = New-CsOnlineSession -OverrideAdminDomain $OverrideAdminDomain
+    $CSSession = New-CsOnlineSession -OverrideAdminDomain $OverrideAdminDomain
 
-    }
-    else {
+  }
+  else {
 
-        $CSSession = New-CsOnlineSession
+    $CSSession = New-CsOnlineSession
 
-    }
+  }
 
-    # Import Session
-    Import-PSSession $CSSession -AllowClobber | Out-Null
+  # Import Session
+  Import-PSSession $CSSession -AllowClobber | Out-Null
 
 }
 else {
 
-    Write-Host "Using existing Skype Online PowerShell Session..."
+  Write-Host "Using existing Skype Online PowerShell Session..."
 
 }
 
 switch ($Action) {
-    Backup {
+  Backup {
 
-        # Backup
-        Write-Host "`r`nBacking up to $Path..."
+    # Backup
+    Write-Host "`r`nBacking up to $Path..."
 
-        if ($Path -and (Test-Path $Path)) {
+    if ($Path -and (Test-Path $Path)) {
 
-            # Create Temp Backup Folders
-            New-Item -Path "$Path\_TeamsConfigBackupTemp_\" -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
-            New-Item -Path "$Path\_TeamsConfigBackupTemp_\HTML\" -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
-            New-Item -Path "$Path\_TeamsConfigBackupTemp_\AudioFiles\" -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
+      # Create Temp Backup Folders
+      New-Item -Path "$Path\_TeamsConfigBackupTemp_\" -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
+      New-Item -Path "$Path\_TeamsConfigBackupTemp_\HTML\" -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
+      New-Item -Path "$Path\_TeamsConfigBackupTemp_\AudioFiles\" -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
 
-            # Start Transcript
-            $date = Get-Date -UFormat "%Y-%m-%d %H%M"
-            Start-Transcript -Path "$Path\_TeamsConfigBackupTemp_\transcript_$date.txt" | Out-Null
+      # Start Transcript
+      $date = Get-Date -UFormat "%Y-%m-%d %H%M"
+      Start-Transcript -Path "$Path\_TeamsConfigBackupTemp_\transcript_$date.txt" | Out-Null
 
-            # Items
-            $script:SavedItems = @()
-            $script:FailedItems = @()
+      # Items
+      $script:SavedItems = @()
+      $script:FailedItems = @()
 
-            # Teams Policies
+      # Teams Policies
 
-            # Get all Teams Policies
-            Write-Host "`r`nBacking up Teams Policies..."
+      # Get all Teams Policies
+      Write-Host "`r`nBacking up Teams Policies..."
 
-            $TeamsPolicies = Get-Command "Get-CS*Teams*Policy*"
+      $TeamsPolicies = Get-Command "Get-CS*Teams*Policy*"
 
-            # Loop through
-            $TeamsPolicies | ForEach-Object {
+      # Loop through
+      $TeamsPolicies | ForEach-Object {
 
-                $policy = $_.Name -replace "Get-CS", ""
+        $policy = $_.Name -replace "Get-CS", ""
 
-                Backup-Configuration -Type $policy
+        Backup-Configuration -Type $policy
 
-            }
+      }
 
-            # Teams Configuration
+      # Teams Configuration
 
-            # Get all Teams Configuration
-            Write-Host "`r`nBacking up Teams Configuration..."
+      # Get all Teams Configuration
+      Write-Host "`r`nBacking up Teams Configuration..."
 
-            $TeamsConfigs = Get-Command "Get-CS*Teams*Configuration*"
+      $TeamsConfigs = Get-Command "Get-CS*Teams*Configuration*"
 
-            # Loop through
-            $TeamsConfigs | ForEach-Object {
+      # Loop through
+      $TeamsConfigs | ForEach-Object {
 
-                $config = $_.Name -replace "Get-CS", ""
+        $config = $_.Name -replace "Get-CS", ""
 
-                Backup-Configuration -Type $config
+        Backup-Configuration -Type $config
 
-            }
+      }
 
-            # Voice
+      # Voice
 
-            # Voice Routing
-            Write-Host "`r`nBacking up Teams Voice Routing Configuration..."
+      # Voice Routing
+      Write-Host "`r`nBacking up Teams Voice Routing Configuration..."
 
-            Backup-Configuration -Type "OnlinePSTNUsage"
-            Backup-Configuration -Type "OnlineVoiceRoutingPolicy"
-            Backup-Configuration -Type "OnlinePSTNGateway"
-            Backup-Configuration -Type "OnlineVoiceRoute"
-            Backup-Configuration -Type "TenantDialPlan"
+      Backup-Configuration -Type "OnlinePSTNUsage"
+      Backup-Configuration -Type "OnlineVoiceRoutingPolicy"
+      Backup-Configuration -Type "OnlinePSTNGateway"
+      Backup-Configuration -Type "OnlineVoiceRoute"
+      Backup-Configuration -Type "TenantDialPlan"
 
-            # Voice Apps
-            Write-Host "`r`nBacking up Teams Voice Apps Configuration..."
+      # Voice Apps
+      Write-Host "`r`nBacking up Teams Voice Apps Configuration..."
 
-            Backup-Configuration -Type "CallQueue"
-            Backup-Configuration -Type "AutoAttendant"
-            Backup-Configuration -Type "OnlineSchedule"
+      Backup-Configuration -Type "CallQueue"
+      Backup-Configuration -Type "AutoAttendant"
+      Backup-Configuration -Type "OnlineSchedule"
 
-            # Misc
-            Write-Host "`r`nBacking up Misc configuration..."
+      # Misc
+      Write-Host "`r`nBacking up Misc configuration..."
 
-            Backup-Configuration -Type "TenantFederationConfiguration"
+      Backup-Configuration -Type "TenantFederationConfiguration"
 
-            # Saved Items
-            if ($script:SavedItems) {
-                
-                Write-Host "`r`nThe following items were copied from the current configuration..." -ForegroundColor Green
-                $script:SavedItems | Format-Table -Property Name, NumberOfObjects
+      # Saved Items
+      if ($script:SavedItems) {
 
-            }
+        Write-Host "`r`nThe following items were copied from the current configuration..." -ForegroundColor Green
+        $script:SavedItems | Format-Table -Property Name, NumberOfObjects
 
-            # Failed Items
-            if ($script:FailedItems) {
+      }
 
-                Write-Host "`r`nThe following items were unable to be copied from the current configuration..." -ForegroundColor Red
-                $script:FailedItems | Format-Table -Property Name, Status
-                $backupStatus = "FAILED"
+      # Failed Items
+      if ($script:FailedItems) {
 
-            }
-            else {
+        Write-Host "`r`nThe following items were unable to be copied from the current configuration..." -ForegroundColor Red
+        $script:FailedItems | Format-Table -Property Name, Status
+        $backupStatus = "FAILED"
 
-                $backupStatus = "SUCCESS"
+      }
+      else {
 
-            }
+        $backupStatus = "SUCCESS"
 
-            # HTML Report
-            $script:SavedItems | Sort-Object -Property Name | Foreach-Object {
-    
-                $htmlSuccessfulRows += "<tr>
+      }
+
+      # HTML Report
+      $script:SavedItems | Sort-Object -Property Name | ForEach-Object {
+
+        $htmlSuccessfulRows += "<tr>
                             <td><a href='./HTML/$($_.name).htm'>$($_.Name)</a></td>
                             <td>$($_.NumberOfObjects)</td>
                         </tr>"
 
-            }
+      }
 
-            $script:FailedItems | Sort-Object -Property Name | Foreach-Object {
-    
-                $htmlFailedRows += "<tr>
+      $script:FailedItems | Sort-Object -Property Name | ForEach-Object {
+
+        $htmlFailedRows += "<tr>
                             <td><a href='./HTML/$($_.name).htm'>$($_.Name)</a></td>
                             <td>$($_.NumberOfObjects)</td>
                         </tr>"
 
-            }
+      }
 
-            $html = "<div class='card'>
+      $html = "<div class='card'>
                         <h5 class='card-header bg-light'>Overview</h5>
                         <div class='card-body'>
                             <table class='table table-borderless'>
@@ -633,142 +634,142 @@ switch ($Action) {
                         </div>
                     </div>
                     <br />"
-        
-            Write-Host " - Saving Backup Report to HTML - Report.htm... " -NoNewline
-            Create-HTMLPage -Content $html -PageTitle "Backup Report" -Path "$Path\_TeamsConfigBackupTemp_\Report.htm"
 
-            # Add Temp Backup Folder in to Zip
-            $BackupFile = "$Path\TeamsConfigBackup $date.zip"
+      Write-Host " - Saving Backup Report to HTML - Report.htm... " -NoNewline
+      Create-HTMLPage -Content $html -PageTitle "Backup Report" -Path "$Path\_TeamsConfigBackupTemp_\Report.htm"
 
-            Write-Host "`r`nAdding files to zip file $BackupFile... " -ForegroundColor Yellow -NoNewline
+      # Add Temp Backup Folder in to Zip
+      $BackupFile = "$Path\TeamsConfigBackup $date.zip"
 
-            Stop-Transcript | Out-Null
+      Write-Host "`r`nAdding files to zip file $BackupFile... " -ForegroundColor Yellow -NoNewline
 
-            # Wait for transcript to stop
-            Start-Sleep -Seconds 1
+      Stop-Transcript | Out-Null
 
-            # Add all files to Zip
-            $SaveBackupFile = try {
-            
-                Compress-Archive -Path "$Path\_TeamsConfigBackupTemp_\*" -DestinationPath $BackupFile -CompressionLevel Optimal
-                Write-Host "SUCCESS" -ForegroundColor Green
-                "SUCCESS"
+      # Wait for transcript to stop
+      Start-Sleep -Seconds 1
 
-            }
-            catch {
+      # Add all files to Zip
+      $SaveBackupFile = try {
 
-                Write-Host "FAILED" -ForegroundColor Red
-                Write-Host $SaveBackupFile -ForegroundColor Red
+        Compress-Archive -Path "$Path\_TeamsConfigBackupTemp_\*" -DestinationPath $BackupFile -CompressionLevel Optimal
+        Write-Host "SUCCESS" -ForegroundColor Green
+        "SUCCESS"
 
-                "FAILED: Unable to save file as $BackupFile with error: $_"
+      }
+      catch {
 
-            }
+        Write-Host "FAILED" -ForegroundColor Red
+        Write-Host $SaveBackupFile -ForegroundColor Red
 
-            # If posting to Flow
-            if ($SendToFlowURL) {
+        "FAILED: Unable to save file as $BackupFile with error: $_"
 
-                $Output = @{
-                
-                    backedUpItems        = $script:SavedItems
-                    backupFileLocation   = $BackupFile
-                    timestamp            = Get-Date -Format o
-                    backupFileSaveStatus = $SaveBackupFile
-                    backupFileSize       = [math]::Round((Get-Item $BackupFile).length / 1KB)
-                    computerName         = $env:computername
-                    failedItems          = $script:FailedItems
-                    failedItemStatus     = $backupStatus
+      }
 
-                }
+      # If posting to Flow
+      if ($SendToFlowURL) {
 
-                $JSON = $Output | ConvertTo-Json
+        $Output = @{
 
-                Write-Host "Sending to Flow URL: $SendToFlowURL"
-
-                Invoke-RestMethod -Method Post -ContentType "application/json" -Body $JSON -Uri $SendToFlowURL
-
-            }
-        
-        }
-        else {
-
-            Write-Warning "No path specified or path is not valid!"
+          backedUpItems        = $script:SavedItems
+          backupFileLocation   = $BackupFile
+          timestamp            = Get-Date -Format o
+          backupFileSaveStatus = $SaveBackupFile
+          backupFileSize       = [math]::Round((Get-Item $BackupFile).length / 1KB)
+          computerName         = $env:computername
+          failedItems          = $script:FailedItems
+          failedItemStatus     = $backupStatus
 
         }
 
-        # Delete Temp Backup Folder
-        Remove-Item -Path "$Path\_TeamsConfigBackupTemp_\" -Force -Recurse | Out-Null
+        $JSON = $Output | ConvertTo-Json
+
+        Write-Host "Sending to Flow URL: $SendToFlowURL"
+
+        Invoke-RestMethod -Method Post -ContentType "application/json" -Body $JSON -Uri $SendToFlowURL
+
+      }
+
+    }
+    else {
+
+      Write-Warning "No path specified or path is not valid!"
 
     }
 
-    Compare {
+    # Delete Temp Backup Folder
+    Remove-Item -Path "$Path\_TeamsConfigBackupTemp_\" -Force -Recurse | Out-Null
 
-        # Compare Backup
+  }
 
-        Write-Host "`r`nComparing backup file to current configuration..."
+  Compare {
 
-        # Check File Exists
-        if (Test-Path $Path) {
+    # Compare Backup
 
-            # All Mismatches
-            $script:AllMismatches = @()
+    Write-Host "`r`nComparing backup file to current configuration..."
 
-            # Extract File
-            Write-Host "Extracting $Path..."
-            Expand-Archive -Path $Path -DestinationPath ".\_TeamsConfigBackupTemp_\" -Force
+    # Check File Exists
+    if (Test-Path $Path) {
 
-            # Loop through each XML file
-            $files = Get-ChildItem -Path ".\_TeamsConfigBackupTemp_\*.xml"
-            $files | ForEach-Object {
+      # All Mismatches
+      $script:AllMismatches = @()
 
-                Compare-File -File $_.Name
+      # Extract File
+      Write-Host "Extracting $Path..."
+      Expand-Archive -Path $Path -DestinationPath ".\_TeamsConfigBackupTemp_\" -Force
 
-            }
+      # Loop through each XML file
+      $files = Get-ChildItem -Path ".\_TeamsConfigBackupTemp_\*.xml"
+      $files | ForEach-Object {
 
-            # Delete Temp Backup Folder
-            Remove-Item -Path ".\_TeamsConfigBackupTemp_\" -Force -Recurse | Out-Null
-    
-            # If mismatches found
-            if ($script:AllMismatches) {
+        Compare-File -File $_.Name
 
-                Write-Host "`r`nThe following MISMATCHES between the backup file and current configuration were found:" -ForegroundColor Red
+      }
 
-                $script:AllMismatches | Format-Table -Property Type, Identity, Name, BackupValue, CurrentValue -Wrap
+      # Delete Temp Backup Folder
+      Remove-Item -Path ".\_TeamsConfigBackupTemp_\" -Force -Recurse | Out-Null
 
-                # If posting to Flow
-                if ($SendToFlowURL) {
+      # If mismatches found
+      if ($script:AllMismatches) {
 
-                    $Output = @{
-                
-                        allMismatches      = $script:AllMismatches
-                        backupFileLocation = $Path
-                        timestamp          = Get-Date -Format o
-                        computerName       = $env:computername
-                        backupFileSize     = [math]::Round((Get-Item $Path).length / 1KB)
-    
-                    }
-    
-                    $JSON = $Output | ConvertTo-Json
+        Write-Host "`r`nThe following MISMATCHES between the backup file and current configuration were found:" -ForegroundColor Red
 
-                    Write-Host "Sending to Flow URL: $SendToFlowURL"
+        $script:AllMismatches | Format-Table -Property Type, Identity, Name, BackupValue, CurrentValue -Wrap
 
-                    Invoke-RestMethod -Method Post -ContentType "application/json" -Body $JSON -Uri $SendToFlowURL
+        # If posting to Flow
+        if ($SendToFlowURL) {
 
-                }
+          $Output = @{
 
-            }
-            else {
+            allMismatches      = $script:AllMismatches
+            backupFileLocation = $Path
+            timestamp          = Get-Date -Format o
+            computerName       = $env:computername
+            backupFileSize     = [math]::Round((Get-Item $Path).length / 1KB)
 
-                Write-Host "`r`nNo MISMATCHES found between the backup file and current configuration." -ForegroundColor Green
+          }
 
-            }
+          $JSON = $Output | ConvertTo-Json
+
+          Write-Host "Sending to Flow URL: $SendToFlowURL"
+
+          Invoke-RestMethod -Method Post -ContentType "application/json" -Body $JSON -Uri $SendToFlowURL
 
         }
-        else {
 
-            Write-Warning "Path specified is not valid!"
+      }
+      else {
 
-        }
+        Write-Host "`r`nNo MISMATCHES found between the backup file and current configuration." -ForegroundColor Green
+
+      }
 
     }
+    else {
+
+      Write-Warning "Path specified is not valid!"
+
+    }
+
+  }
 
 }
